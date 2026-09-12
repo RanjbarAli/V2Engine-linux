@@ -189,9 +189,15 @@ fn vmess(raw: &str) -> Result<Value> {
     if v["tls"].as_str().unwrap_or("") == "tls" {
         o["tls"] = json!({"enabled":true,"server_name":v["sni"].as_str().unwrap_or(server),"insecure":v["allowInsecure"].as_bool().unwrap_or(false)});
     }
+    let network = v["net"].as_str().unwrap_or("tcp");
+    let transport_kind = if network == "tcp" && v["type"].as_str() == Some("http") {
+        "http"
+    } else {
+        network
+    };
     transport(
         &mut o,
-        v["net"].as_str().unwrap_or("tcp"),
+        transport_kind,
         v["host"].as_str(),
         v["path"].as_str(),
         v["type"].as_str(),
@@ -233,9 +239,15 @@ fn url_outbound(raw: &str) -> Result<Value> {
         }
         o["tls"] = tls;
     }
+    let network = qp(&u, "type").unwrap_or_else(|| "tcp".into());
+    let transport_kind = if network == "tcp" && qp(&u, "headerType").as_deref() == Some("http") {
+        "http"
+    } else {
+        &network
+    };
     transport(
         &mut o,
-        &qp(&u, "type").unwrap_or_else(|| "tcp".into()),
+        transport_kind,
         qp(&u, "host").as_deref(),
         qp(&u, "path").as_deref(),
         qp(&u, "serviceName").as_deref(),
@@ -335,7 +347,7 @@ pub fn singbox_config(
     let mut proxy = outbound(server)?;
     proxy["tag"] = json!("proxy");
     let inbound = if tun {
-        json!({"type":"tun","tag":"tun-in","interface_name":"v2engine0","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"mtu":9000,"auto_route":true,"auto_redirect":true,"strict_route":true})
+        json!({"type":"tun","tag":"tun-in","interface_name":"v2engine0","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"mtu":1500,"auto_route":true,"auto_redirect":true,"strict_route":true,"iproute2_table_index":20228,"iproute2_rule_index":9028,"dns_mode":"hijack"})
     } else {
         json!({"type":"mixed","tag":"test-in","listen":"127.0.0.1","listen_port":socks_port.unwrap_or(19090)})
     };

@@ -13,6 +13,7 @@ install -Dm755 "$ROOT/target/release/v2engine-helper" "$STAGE/usr/lib/v2engine/v
 install -Dm755 "$ROOT/vendor/sing-box" "$STAGE/usr/lib/v2engine/sing-box"
 install -Dm644 "$ROOT/packaging/io.github.ranjbarali.V2Engine.desktop" "$STAGE/usr/share/applications/io.github.ranjbarali.V2Engine.desktop"
 install -Dm644 "$ROOT/packaging/io.github.ranjbarali.V2Engine.png" "$STAGE/usr/share/icons/hicolor/512x512/apps/io.github.ranjbarali.V2Engine.png"
+install -Dm644 "$ROOT/assets/github-mark.svg" "$STAGE/usr/share/v2engine/github-mark.svg"
 install -Dm644 "$ROOT/packaging/io.github.ranjbarali.V2Engine.policy" "$STAGE/usr/share/polkit-1/actions/io.github.ranjbarali.V2Engine.policy"
 install -Dm644 "$ROOT/packaging/copyright" "$STAGE/usr/share/doc/v2engine/copyright"
 install -Dm644 "$ROOT/packaging/lintian-overrides" "$STAGE/usr/share/lintian/overrides/v2engine"

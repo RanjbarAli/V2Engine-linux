@@ -5,8 +5,8 @@ use ksni::blocking::TrayMethods;
 use std::{
     cell::RefCell,
     fs,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    io::Write,
+    net::TcpListener,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::PathBuf,
     process::{Command, Stdio},
@@ -42,7 +42,8 @@ fn open_main_window() {
 }
 
 fn tray_toggle_connection() {
-    let args = if system_connected() {
+    let starting = !system_connected();
+    let args = if !starting {
         vec!["stop".to_string()]
     } else {
         let store = config::load();
@@ -61,15 +62,25 @@ fn tray_toggle_connection() {
         vec!["start".to_string(), path.to_string_lossy().into_owned()]
     };
     let transient = args.get(1).map(PathBuf::from);
-    let _ = Command::new("pkexec")
+    let result = Command::new("pkexec")
         .arg("/usr/lib/v2engine/v2engine-helper")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+        .is_ok_and(|status| status.success());
     if let Some(path) = transient {
         let _ = fs::remove_file(path);
+    }
+    if starting && result && public_ip().is_err() {
+        let _ = Command::new("pkexec")
+            .args(["/usr/lib/v2engine/v2engine-helper", "stop"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        open_main_window();
     }
 }
 
@@ -196,15 +207,18 @@ struct Ui {
     status_dot: gtk::Box,
     connection_detail: gtk::Label,
     current_ip: gtk::Label,
-    protocol_value: gtk::Label,
-    upload: gtk::Label,
-    download: gtk::Label,
+    download_speed: gtk::Label,
+    upload_speed: gtk::Label,
+    downloaded: gtk::Label,
+    uploaded: gtk::Label,
     duration: gtk::Label,
     server_stack: gtk::Stack,
     server_panel: gtk::Box,
     empty_instruction: gtk::Label,
     direct_list: gtk::ListBox,
     connected_since: Option<Instant>,
+    traffic_baseline: Option<(u64, u64)>,
+    traffic_last: Option<(Instant, u64, u64)>,
     busy: bool,
 }
 
@@ -288,8 +302,8 @@ fn build(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("V2Engine")
-        .default_width(980)
-        .default_height(620)
+        .default_width(860)
+        .default_height(500)
         .build();
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("app-shell");
@@ -298,13 +312,6 @@ fn build(app: &gtk::Application) {
     header.add_css_class("app-header");
     header.set_show_title_buttons(false);
     header.set_title_widget(Some(&gtk::Label::new(None)));
-    let brand = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    brand.set_valign(gtk::Align::Center);
-    let brand_mark = styled_label("V", "brand-mark", 0.5);
-    brand_mark.set_valign(gtk::Align::Center);
-    brand.append(&brand_mark);
-    brand.append(&styled_label("V2Engine", "wordmark", 0.0));
-    header.pack_start(&brand);
     let window_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     window_controls.add_css_class("window-controls");
     window_controls.set_valign(gtk::Align::Center);
@@ -325,7 +332,7 @@ fn build(app: &gtk::Application) {
     window_controls.append(&close);
 
     header.pack_end(&window_controls);
-    root.append(&header);
+    window.set_titlebar(Some(&header));
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 14);
     body.set_margin_start(20);
@@ -338,7 +345,6 @@ fn build(app: &gtk::Application) {
     workspace.set_vexpand(true);
     workspace.set_homogeneous(true);
 
-    let left_column = gtk::Box::new(gtk::Orientation::Vertical, 14);
     let connection_panel = gtk::Box::new(gtk::Orientation::Vertical, 18);
     connection_panel.add_css_class("panel");
     connection_panel.add_css_class("connection-panel");
@@ -377,22 +383,23 @@ fn build(app: &gtk::Application) {
         .build();
     metrics.add_css_class("metrics-grid");
     let (ip_item, current_ip) = metric_item("Current IP");
-    let (protocol_item, protocol_value) = metric_item("Protocol");
-    let (upload_item, upload) = metric_item("Upload");
-    let (download_item, download) = metric_item("Download");
     let (duration_item, duration) = metric_item("Duration");
+    let (download_speed_item, download_speed) = metric_item("Download speed");
+    let (upload_speed_item, upload_speed) = metric_item("Upload speed");
+    let (downloaded_item, downloaded) = metric_item("Downloaded");
+    let (uploaded_item, uploaded) = metric_item("Uploaded");
     metrics.attach(&ip_item, 0, 0, 1, 1);
-    metrics.attach(&protocol_item, 1, 0, 1, 1);
-    metrics.attach(&upload_item, 0, 1, 1, 1);
-    metrics.attach(&download_item, 1, 1, 1, 1);
-    metrics.attach(&duration_item, 0, 2, 2, 1);
+    metrics.attach(&duration_item, 1, 0, 1, 1);
+    metrics.attach(&download_speed_item, 0, 1, 1, 1);
+    metrics.attach(&upload_speed_item, 1, 1, 1, 1);
+    metrics.attach(&downloaded_item, 0, 2, 1, 1);
+    metrics.attach(&uploaded_item, 1, 2, 1, 1);
     connection_panel.append(&metrics);
-    left_column.append(&connection_panel);
 
     let direct_panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     direct_panel.add_css_class("panel");
     direct_panel.add_css_class("direct-panel");
-    direct_panel.set_vexpand(true);
+    direct_panel.set_vexpand(false);
     direct_panel.append(&styled_label("Direct Sites", "panel-title", 0.0));
     let direct_description = styled_label(
         "These domains bypass the proxy and use your normal connection.",
@@ -415,12 +422,11 @@ fn build(app: &gtk::Application) {
     add_domain.add_css_class("text-action");
     add_domain.set_halign(gtk::Align::Center);
     direct_panel.append(&add_domain);
-    left_column.append(&direct_panel);
 
     let server_panel = gtk::Box::new(gtk::Orientation::Vertical, 14);
     server_panel.add_css_class("panel");
     server_panel.add_css_class("servers-panel");
-    server_panel.set_vexpand(true);
+    server_panel.set_vexpand(false);
     let server_header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let servers_title = styled_label("Servers", "panel-title", 0.0);
     servers_title.set_hexpand(true);
@@ -467,9 +473,21 @@ fn build(app: &gtk::Application) {
     server_stack.add_named(&scroll, Some("list"));
     server_panel.append(&server_stack);
 
-    workspace.append(&left_column);
+    workspace.append(&connection_panel);
     workspace.append(&server_panel);
-    body.append(&workspace);
+    let direct_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    direct_page.set_vexpand(true);
+    direct_page.append(&direct_panel);
+    let settings_content = settings_page();
+    let page_stack = gtk::Stack::new();
+    page_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+    page_stack.set_transition_duration(140);
+    page_stack.set_vexpand(true);
+    page_stack.add_named(&workspace, Some("servers"));
+    page_stack.add_named(&direct_page, Some("direct"));
+    page_stack.add_named(&settings_content, Some("settings"));
+    page_stack.set_visible_child_name("servers");
+    body.append(&page_stack);
 
     let navigation = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     navigation.add_css_class("bottom-nav");
@@ -492,15 +510,18 @@ fn build(app: &gtk::Application) {
         status_dot: state_dot.clone(),
         connection_detail: connection_detail.clone(),
         current_ip,
-        protocol_value,
-        upload,
-        download,
+        download_speed,
+        upload_speed,
+        downloaded,
+        uploaded,
         duration,
         server_stack: server_stack.clone(),
         server_panel: server_panel.clone(),
         empty_instruction: empty_instruction.clone(),
         direct_list: direct_list.clone(),
         connected_since: None,
+        traffic_baseline: None,
+        traffic_last: None,
         busy: false,
     }));
     sync_system_state(&state);
@@ -545,17 +566,18 @@ fn build(app: &gtk::Application) {
         add_server.connect_clicked(move |_| import_dialog(&s, &w));
     }
     {
-        let parent = window.clone();
+        let pages = page_stack.clone();
         let servers = nav_servers.clone();
         let direct = nav_direct.clone();
         nav_settings.connect_clicked(move |button| {
             servers.remove_css_class("nav-active");
             direct.remove_css_class("nav-active");
             button.add_css_class("nav-active");
-            settings_dialog(&parent);
+            pages.set_visible_child_name("settings");
         });
     }
     {
+        let pages = page_stack.clone();
         let list = list.clone();
         let direct = nav_direct.clone();
         let settings = nav_settings.clone();
@@ -563,10 +585,12 @@ fn build(app: &gtk::Application) {
             direct.remove_css_class("nav-active");
             settings.remove_css_class("nav-active");
             button.add_css_class("nav-active");
+            pages.set_visible_child_name("servers");
             list.grab_focus();
         });
     }
     {
+        let pages = page_stack.clone();
         let direct_list = direct_list.clone();
         let servers = nav_servers.clone();
         let settings = nav_settings.clone();
@@ -574,6 +598,7 @@ fn build(app: &gtk::Application) {
             servers.remove_css_class("nav-active");
             settings.remove_css_class("nav-active");
             button.add_css_class("nav-active");
+            pages.set_visible_child_name("direct");
             direct_list.grab_focus();
         });
     }
@@ -643,31 +668,135 @@ fn sync_system_state(s: &Rc<RefCell<Ui>>) {
             .iter()
             .find(|server| Some(&server.id) == u.store.selected.as_ref())
         {
-            let protocol = protocol_label(server);
             u.connection_detail
-                .set_text(&format!("{} · {}", server.name, protocol));
-            u.protocol_value.set_text(&protocol);
+                .set_text(&format!("{} · {}", server.name, protocol_label(server)));
         }
         if u.connected_since.is_none() {
             let started = Instant::now();
             u.connected_since = Some(started);
             u.duration.set_text("00:00:00");
+            initialize_traffic(&mut u);
             timer = Some(started);
         }
     } else {
         u.status.set_text("Disconnected");
         u.status_dot.remove_css_class("connected");
         u.current_ip.set_text("—");
-        u.protocol_value.set_text("—");
-        u.upload.set_text("—");
-        u.download.set_text("—");
+        reset_traffic_labels(&mut u);
         u.duration.set_text("—");
         u.connected_since = None;
+        u.traffic_baseline = None;
+        u.traffic_last = None;
     }
     drop(u);
     if let Some(started) = timer {
         start_duration_timer(s, started);
+        load_public_ip(s);
     }
+}
+
+fn reset_traffic_labels(u: &mut Ui) {
+    u.download_speed.set_text("—");
+    u.upload_speed.set_text("—");
+    u.downloaded.set_text("—");
+    u.uploaded.set_text("—");
+}
+
+fn network_bytes() -> Option<(u64, u64)> {
+    let rx = fs::read_to_string("/sys/class/net/v2engine0/statistics/rx_bytes")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let tx = fs::read_to_string("/sys/class/net/v2engine0/statistics/tx_bytes")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some((rx, tx))
+}
+
+fn initialize_traffic(u: &mut Ui) {
+    let now = Instant::now();
+    if let Some((rx, tx)) = network_bytes() {
+        u.traffic_baseline = Some((rx, tx));
+        u.traffic_last = Some((now, rx, tx));
+        u.download_speed.set_text("0 B/s");
+        u.upload_speed.set_text("0 B/s");
+        u.downloaded.set_text("0 B");
+        u.uploaded.set_text("0 B");
+    } else {
+        reset_traffic_labels(u);
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn public_ip() -> anyhow::Result<String> {
+    for url in ["https://api.ipify.org", "https://ifconfig.me/ip"] {
+        let output = Command::new("curl")
+            .args([
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--noproxy",
+                "*",
+                "--max-time",
+                "12",
+                url,
+            ])
+            .env_remove("HTTP_PROXY")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("ALL_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .output();
+        if let Ok(output) = output {
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if output.status.success() && value.parse::<std::net::IpAddr>().is_ok() {
+                return Ok(value);
+            }
+        }
+    }
+    anyhow::bail!("proxy connectivity check failed")
+}
+
+fn load_public_ip(s: &Rc<RefCell<Ui>>) {
+    s.borrow().current_ip.set_text("Checking…");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(public_ip());
+    });
+    let state = s.clone();
+    glib::timeout_add_local(Duration::from_millis(100), move || {
+        match receiver.try_recv() {
+            Ok(Ok(ip)) => {
+                if state.borrow().connected_since.is_some() {
+                    state.borrow().current_ip.set_text(&ip);
+                }
+                glib::ControlFlow::Break
+            }
+            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                state.borrow().current_ip.set_text("Unavailable");
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        }
+    });
 }
 
 fn refresh(s: &Rc<RefCell<Ui>>) {
@@ -748,14 +877,18 @@ fn refresh(s: &Rc<RefCell<Ui>>) {
             latency.add_css_class("latency-poor");
         }
         latency_box.append(&latency);
-        let chevron = gtk::Image::from_icon_name("go-next-symbolic");
-        chevron.set_pixel_size(13);
-        chevron.add_css_class("server-chevron");
+        let remove = gtk::Button::new();
+        remove.set_icon_name("user-trash-symbolic");
+        remove.add_css_class("server-delete");
+        remove.set_tooltip_text(Some("Delete server"));
+        let state = s.clone();
+        let server_id = srv.id.clone();
+        remove.connect_clicked(move |_| delete_server(&state, &server_id));
         grid.attach(&flag, 0, 0, 1, 2);
         grid.attach(&name, 1, 0, 1, 1);
         grid.attach(&proto, 1, 1, 1, 1);
         grid.attach(&latency_box, 2, 0, 1, 2);
-        grid.attach(&chevron, 3, 0, 1, 2);
+        grid.attach(&remove, 3, 0, 1, 2);
         row.set_child(Some(&grid));
         u.list.append(&row);
         if selected.as_deref() == Some(&srv.id) {
@@ -909,25 +1042,37 @@ fn import_dialog(s: &Rc<RefCell<Ui>>, parent: &gtk::ApplicationWindow) {
     input.grab_focus();
 }
 
-fn settings_dialog(parent: &gtk::ApplicationWindow) {
-    let dialog = gtk::Dialog::builder()
-        .transient_for(parent)
-        .modal(true)
-        .title("Settings")
-        .default_width(440)
-        .build();
-    dialog.add_button("Close", gtk::ResponseType::Close);
-    dialog.connect_response(|dialog, _| dialog.close());
-
+fn settings_page() -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
     content.add_css_class("settings-content");
-    content.set_margin_start(22);
-    content.set_margin_end(22);
-    content.set_margin_top(18);
-    content.set_margin_bottom(8);
+    content.add_css_class("panel");
+    content.set_vexpand(true);
+
+    let startup_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let startup_copy = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    startup_copy.set_hexpand(true);
+    startup_copy.append(&styled_label("Run at startup", "panel-title", 0.0));
+    startup_copy.append(&styled_label(
+        "Open V2Engine automatically when you sign in.",
+        "panel-description",
+        0.0,
+    ));
+    let startup = gtk::Switch::new();
+    startup.set_valign(gtk::Align::Center);
+    startup.set_active(autostart_path().is_some_and(|path| path.exists()));
+    startup.connect_state_set(move |_, enabled| {
+        if let Err(error) = set_autostart(enabled) {
+            eprintln!("Could not update startup preference: {error}");
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    startup_row.append(&startup_copy);
+    startup_row.append(&startup);
+    content.append(&startup_row);
 
     let update_section = gtk::Box::new(gtk::Orientation::Vertical, 7);
-    update_section.append(&styled_label("Software Update", "panel-title", 0.0));
+    update_section.append(&styled_label("Update Software", "panel-title", 0.0));
     update_section.append(&styled_label(
         &format!("Installed version: {}", env!("CARGO_PKG_VERSION")),
         "panel-description",
@@ -954,14 +1099,29 @@ fn settings_dialog(parent: &gtk::ApplicationWindow) {
         "panel-description",
         0.0,
     ));
+    about_section.append(&styled_label("Creator", "metric-caption", 0.0));
     about_section.append(&styled_label("Ali Ranjbar Jelodar", "metric-value", 0.0));
-    let github =
-        gtk::LinkButton::with_label("https://github.com/RanjbarAli", "github.com/RanjbarAli");
+    let github = gtk::LinkButton::with_label(
+        "https://github.com/RanjbarAli/V2Engine-linux",
+        "RanjbarAli/V2Engine-linux",
+    );
     github.set_halign(gtk::Align::Start);
     github.add_css_class("author-link");
+    let github_content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let installed_github_icon = PathBuf::from("/usr/share/v2engine/github-mark.svg");
+    let github_icon = gtk::Image::from_file(if installed_github_icon.exists() {
+        installed_github_icon
+    } else {
+        PathBuf::from("assets/github-mark.svg")
+    });
+    github_icon.set_pixel_size(18);
+    github_icon.add_css_class("github-icon");
+    github_content.append(&github_icon);
+    github_content.append(&gtk::Label::new(Some("RanjbarAli/V2Engine-linux")));
+    github.set_child(Some(&github_content));
+    github.set_tooltip_text(Some("Open the V2Engine GitHub repository"));
     about_section.append(&github);
     content.append(&about_section);
-    dialog.content_area().append(&content);
 
     let pending_release = Rc::new(RefCell::new(None::<ReleaseInfo>));
     {
@@ -1031,7 +1191,43 @@ fn settings_dialog(parent: &gtk::ApplicationWindow) {
             });
         });
     }
-    dialog.present();
+    content
+}
+
+fn autostart_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|path| {
+        path.join("autostart")
+            .join("io.github.ranjbarali.V2Engine.desktop")
+    })
+}
+
+fn set_autostart(enabled: bool) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = autostart_path().ok_or_else(|| anyhow::anyhow!("config directory unavailable"))?;
+    if !enabled {
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        return Ok(());
+    }
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("invalid autostart path"))?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(directory)?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    let data = "[Desktop Entry]\nType=Application\nName=V2Engine\nExec=/usr/bin/v2engine\nIcon=io.github.ranjbarali.V2Engine\nTerminal=false\nX-GNOME-Autostart-enabled=true\n";
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(data.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -1242,6 +1438,22 @@ fn delete_selected(s: &Rc<RefCell<Ui>>) {
     refresh(s)
 }
 
+fn delete_server(s: &Rc<RefCell<Ui>>, id: &str) {
+    let mut u = s.borrow_mut();
+    if u.toggle.is_active() && u.store.selected.as_deref() == Some(id) {
+        u.connection_detail
+            .set_text("Disconnect before deleting the active server.");
+        return;
+    }
+    u.store.servers.retain(|server| server.id != id);
+    if u.store.selected.as_deref() == Some(id) {
+        u.store.selected = u.store.servers.first().map(|server| server.id.clone());
+    }
+    let _ = config::save(&u.store);
+    drop(u);
+    refresh(s);
+}
+
 fn runtime_config(server: &Server, bypass: &[String]) -> anyhow::Result<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let uid = unsafe { libc::getuid() };
@@ -1311,7 +1523,7 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
         None
     };
     thread::spawn(move || {
-        let result = Command::new("pkexec")
+        let helper = Command::new("pkexec")
             .arg("/usr/lib/v2engine/v2engine-helper")
             .args(args)
             .output()
@@ -1323,6 +1535,22 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                 }
             })
             .unwrap_or_else(|e| Err(e.to_string()));
+        let result = match helper {
+            Ok(()) if on => match public_ip() {
+                Ok(ip) => Ok(Some(ip)),
+                Err(error) => {
+                    let _ = Command::new("pkexec")
+                        .args(["/usr/lib/v2engine/v2engine-helper", "stop"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    Err(error.to_string())
+                }
+            },
+            Ok(()) => Ok(None),
+            Err(error) => Err(error),
+        };
         if let Some(path) = transient {
             let _ = fs::remove_file(path);
         }
@@ -1337,7 +1565,7 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                 u.toggle.set_sensitive(true);
                 let mut timer = None;
                 match result {
-                    Ok(()) => {
+                    Ok(ip) => {
                         if on {
                             u.status.set_text("Connected");
                             u.status_dot.add_css_class("connected");
@@ -1347,24 +1575,28 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                                 .iter()
                                 .find(|server| Some(&server.id) == u.store.selected.as_ref())
                             {
-                                let protocol = protocol_label(server);
-                                u.connection_detail
-                                    .set_text(&format!("{} · {}", server.name, protocol));
-                                u.protocol_value.set_text(&protocol);
+                                u.connection_detail.set_text(&format!(
+                                    "{} · {}",
+                                    server.name,
+                                    protocol_label(server)
+                                ));
                             }
+                            u.current_ip
+                                .set_text(ip.as_deref().unwrap_or("Unavailable"));
                             let started = Instant::now();
                             u.connected_since = Some(started);
                             u.duration.set_text("00:00:00");
+                            initialize_traffic(&mut u);
                             timer = Some(started);
                         } else {
                             u.status.set_text("Disconnected");
                             u.status_dot.remove_css_class("connected");
                             u.current_ip.set_text("—");
-                            u.protocol_value.set_text("—");
-                            u.upload.set_text("—");
-                            u.download.set_text("—");
+                            reset_traffic_labels(&mut u);
                             u.duration.set_text("—");
                             u.connected_since = None;
+                            u.traffic_baseline = None;
+                            u.traffic_last = None;
                             if let Some(server) = u
                                 .store
                                 .servers
@@ -1391,8 +1623,14 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                         u.connection_detail.set_text(if e.is_empty() {
                             "Connection cancelled"
                         } else {
-                            "Check the selected server and try again."
+                            "The proxy could not reach the internet."
                         });
+                        u.current_ip.set_text("—");
+                        reset_traffic_labels(&mut u);
+                        u.duration.set_text("—");
+                        u.connected_since = None;
+                        u.traffic_baseline = None;
+                        u.traffic_last = None;
                         if on {
                             u.toggle.set_active(false)
                         } else {
@@ -1415,7 +1653,7 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
 fn start_duration_timer(s: &Rc<RefCell<Ui>>, started: Instant) {
     let state = s.clone();
     glib::timeout_add_local(Duration::from_secs(1), move || {
-        let u = state.borrow();
+        let mut u = state.borrow_mut();
         if u.connected_since != Some(started) {
             return glib::ControlFlow::Break;
         }
@@ -1426,6 +1664,27 @@ fn start_duration_timer(s: &Rc<RefCell<Ui>>, started: Instant) {
             (seconds % 3600) / 60,
             seconds % 60
         ));
+        if let Some((rx, tx)) = network_bytes() {
+            let now = Instant::now();
+            if let Some((last_time, last_rx, last_tx)) = u.traffic_last {
+                let elapsed = now.duration_since(last_time).as_secs_f64().max(0.001);
+                u.download_speed.set_text(&format!(
+                    "{}/s",
+                    format_bytes(((rx.saturating_sub(last_rx)) as f64 / elapsed) as u64)
+                ));
+                u.upload_speed.set_text(&format!(
+                    "{}/s",
+                    format_bytes(((tx.saturating_sub(last_tx)) as f64 / elapsed) as u64)
+                ));
+            }
+            if let Some((base_rx, base_tx)) = u.traffic_baseline {
+                u.downloaded
+                    .set_text(&format_bytes(rx.saturating_sub(base_rx)));
+                u.uploaded
+                    .set_text(&format_bytes(tx.saturating_sub(base_tx)));
+            }
+            u.traffic_last = Some((now, rx, tx));
+        }
         glib::ControlFlow::Continue
     });
 }
@@ -1576,11 +1835,24 @@ fn test_one(server: &Server) -> String {
         return "Failed".into();
     };
     let dir = std::env::temp_dir().join(format!("v2engine-test-{}-{}", std::process::id(), port));
-    if fs::create_dir(&dir).is_err() {
+    if fs::DirBuilder::new()
+        .recursive(false)
+        .mode(0o700)
+        .create(&dir)
+        .is_err()
+    {
         return "Failed".into();
     }
     let path = dir.join("config.json");
-    if fs::write(&path, serde_json::to_vec(&cfg).unwrap()).is_err() {
+    let config_data = serde_json::to_vec(&cfg).unwrap();
+    let config_file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut file| file.write_all(&config_data));
+    if config_file.is_err() {
+        let _ = fs::remove_dir(&dir);
         return "Failed".into();
     }
     let mut child = match Command::new(singbox_path())
@@ -1591,54 +1863,91 @@ fn test_one(server: &Server) -> String {
         .spawn()
     {
         Ok(c) => c,
-        Err(_) => return "Failed".into(),
+        Err(_) => {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_dir(&dir);
+            return "Failed".into();
+        }
     };
     thread::sleep(Duration::from_millis(350));
-    let start = Instant::now();
-    let result = (|| -> std::io::Result<()> {
-        let mut sock = TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}").parse().unwrap(),
-            Duration::from_secs(6),
-        )?;
-        sock.set_read_timeout(Some(Duration::from_secs(7)))?;
-        sock.write_all(&[5, 1, 0])?;
-        let mut b = [0u8; 2];
-        sock.read_exact(&mut b)?;
-        if b != [5, 0] {
-            return Err(std::io::ErrorKind::Other.into());
-        }
-        let host = b"www.gstatic.com";
-        let mut req = vec![5, 1, 0, 3, host.len() as u8];
-        req.extend(host);
-        req.extend(443u16.to_be_bytes());
-        sock.write_all(&req)?;
-        let mut reply = [0u8; 10];
-        sock.read_exact(&mut reply[..4])?;
-        if reply[1] != 0 {
-            return Err(std::io::ErrorKind::ConnectionRefused.into());
-        }
-        Ok(())
-    })();
-    let elapsed = start.elapsed().as_millis();
+    let proxy = format!("socks5h://127.0.0.1:{port}");
+    let result = Command::new("curl")
+        .args([
+            "--proxy",
+            &proxy,
+            "--noproxy",
+            "",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "10",
+            "--output",
+            "/dev/null",
+            "--write-out",
+            "%{time_total}",
+            "https://www.gstatic.com/generate_204",
+        ])
+        .env_remove("HTTP_PROXY")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("ALL_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("https_proxy")
+        .env_remove("all_proxy")
+        .output();
     let _ = child.kill();
     let _ = child.wait();
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir(dir);
     match result {
-        Ok(()) => format!("{elapsed} ms"),
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            ) =>
-        {
-            "Timeout".into()
-        }
-        Err(_) => "Failed".into(),
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+            .ok()
+            .and_then(|seconds| seconds.trim().parse::<f64>().ok())
+            .map(|seconds| format!("{} ms", (seconds * 1000.0).round() as u64))
+            .unwrap_or_else(|| "Failed".into()),
+        Ok(output) if output.status.code() == Some(28) => "Timeout".into(),
+        _ => "Failed".into(),
     }
 }
 
 fn run_tests(s: &Rc<RefCell<Ui>>, button: &gtk::Button) {
+    if system_connected() {
+        button.set_sensitive(false);
+        button.set_label("Disconnecting…");
+        s.borrow()
+            .status
+            .set_text("Disconnecting for direct tests…");
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let result = Command::new("pkexec")
+                .args(["/usr/lib/v2engine/v2engine-helper", "stop"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            let _ = sender.send(result);
+        });
+        let state = s.clone();
+        let test_button = button.clone();
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            match receiver.try_recv() {
+                Ok(true) => {
+                    sync_system_state(&state);
+                    run_tests(&state, &test_button);
+                    glib::ControlFlow::Break
+                }
+                Ok(false) | Err(mpsc::TryRecvError::Disconnected) => {
+                    state.borrow().status.set_text("Could not stop connection");
+                    test_button.set_label("Test All");
+                    test_button.set_sensitive(true);
+                    glib::ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            }
+        });
+        return;
+    }
     let servers = s.borrow().store.servers.clone();
     if servers.is_empty() {
         return;
@@ -1712,6 +2021,16 @@ mod tests {
             "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls#Demo"
         )
         .is_ok())
+    }
+
+    #[test]
+    fn maps_legacy_tcp_http_header_to_http_transport() {
+        let server = config::parse(
+            "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?encryption=none&type=tcp&headerType=http#HTTP",
+        )
+        .unwrap();
+        let outbound = config::outbound(&server).unwrap();
+        assert_eq!(outbound["transport"]["type"], "http");
     }
 
     #[test]

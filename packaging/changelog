@@ -6,5 +6,8 @@ v2engine (1.0.0) stable; urgency=medium
   * Add the compact charcoal and emerald GTK interface.
   * Add a native Linux status notifier menu and custom window controls.
   * Add GitHub Release update checks and verified in-app package installation.
+  * Verify TUN connectivity before reporting success and show live traffic data.
+  * Add in-window Direct Sites and Settings pages with desktop startup support.
+  * Make Test All perform direct, real proxied HTTPS checks.
 
  -- Ali Ranjbar <info@aliranjbar.me>  Sat, 12 Sep 2026 12:00:00 +0400

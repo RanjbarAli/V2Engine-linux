@@ -33,7 +33,43 @@ fn is_ours(p: i32) -> bool {
         .and_then(|path| fs::canonicalize(path).ok())
         == fs::canonicalize(BIN).ok()
 }
+
+fn cleanup_network() {
+    let _ = Command::new("nft")
+        .args(["delete", "table", "inet", "sing-box"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = Command::new("ip")
+        .args(["link", "delete", "v2engine0"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    for family in ["-4", "-6"] {
+        let _ = Command::new("ip")
+            .args([family, "route", "flush", "table", "20228"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        for priority in 9028..9040 {
+            loop {
+                let status = Command::new("ip")
+                    .args([family, "rule", "delete", "priority", &priority.to_string()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                if !status.is_ok_and(|value| value.success()) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 fn stop() -> Result<()> {
+    if unsafe { libc::geteuid() } != 0 {
+        bail!("root privileges required")
+    }
     if let Some(p) = pid() {
         if alive(p) && is_ours(p) {
             let _ = kill(Pid::from_raw(-p), Signal::SIGTERM);
@@ -45,9 +81,16 @@ fn stop() -> Result<()> {
             }
             if alive(p) {
                 let _ = kill(Pid::from_raw(-p), Signal::SIGKILL);
+                for _ in 0..10 {
+                    if !alive(p) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
             }
         }
     }
+    cleanup_network();
     let _ = fs::remove_file(PID);
     let _ = fs::remove_file(CONF);
     Ok(())
@@ -217,6 +260,9 @@ fn validate_policy(value: &Value) -> bool {
                 "auto_route",
                 "auto_redirect",
                 "strict_route",
+                "iproute2_table_index",
+                "iproute2_rule_index",
+                "dns_mode",
             ],
         )
         || inbounds[0].get("type").and_then(Value::as_str) != Some("tun")
@@ -229,10 +275,19 @@ fn validate_policy(value: &Value) -> bool {
                 Value::String("172.19.0.1/30".into()),
                 Value::String("fdfe:dcba:9876::1/126".into()),
             ])
-        || inbounds[0].get("mtu").and_then(Value::as_u64) != Some(9000)
+        || inbounds[0].get("mtu").and_then(Value::as_u64) != Some(1500)
         || inbounds[0].get("auto_route").and_then(Value::as_bool) != Some(true)
         || inbounds[0].get("auto_redirect").and_then(Value::as_bool) != Some(true)
         || inbounds[0].get("strict_route").and_then(Value::as_bool) != Some(true)
+        || inbounds[0]
+            .get("iproute2_table_index")
+            .and_then(Value::as_u64)
+            != Some(20228)
+        || inbounds[0]
+            .get("iproute2_rule_index")
+            .and_then(Value::as_u64)
+            != Some(9028)
+        || inbounds[0].get("dns_mode").and_then(Value::as_str) != Some("hijack")
     {
         return false;
     }
@@ -345,10 +400,25 @@ fn start(path: &str) -> Result<()> {
         });
     }
     let mut child = command.spawn().context("cannot start sing-box")?;
-    thread::sleep(Duration::from_millis(700));
-    if let Some(status) = child.try_wait()? {
+    let mut ready = false;
+    for _ in 0..50 {
+        if let Some(status) = child.try_wait()? {
+            cleanup_network();
+            let _ = fs::remove_file(CONF);
+            bail!("sing-box exited during startup: {status}")
+        }
+        if std::path::Path::new("/sys/class/net/v2engine0").exists() {
+            ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    if !ready {
+        let _ = kill(Pid::from_raw(-(child.id() as i32)), Signal::SIGTERM);
+        let _ = child.wait();
+        cleanup_network();
         let _ = fs::remove_file(CONF);
-        bail!("sing-box exited during startup: {status}")
+        bail!("TUN interface did not become ready")
     }
     let mut f = fs::OpenOptions::new()
         .create(true)

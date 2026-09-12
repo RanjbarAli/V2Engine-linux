@@ -9,6 +9,7 @@ V2Engine is a lightweight native Linux proxy client built with Rust and GTK4. It
 ## Features
 
 - Native GTK4 interface with a compact charcoal and emerald design
+- Three in-window pages for Servers, Direct Sites and Settings
 - System-wide TUN routing powered by sing-box
 - VLESS, VLESS Reality, VMess, Trojan, Shadowsocks and SSH support
 - SSH password and private-key authentication
@@ -17,6 +18,8 @@ V2Engine is a lightweight native Linux proxy client built with Rust and GTK4. It
 - Direct Sites routing for domains and all their subdomains
 - Native Linux status notifier with server selection and connection controls
 - In-app update checks using GitHub Releases
+- Live public IP, download/upload speed and transferred-byte counters
+- Optional desktop-session startup
 - No Electron, WebView, database or background polling
 
 ## Installation
@@ -77,7 +80,7 @@ Domains listed under **Direct Sites** bypass the proxy and use the normal connec
 
 ## Server testing
 
-**Test All** starts temporary unprivileged sing-box instances and measures actual proxied TCP connectivity. Tests run concurrently with a limit of four workers, update each server progressively and do not transfer large amounts of data.
+**Test All** starts temporary unprivileged sing-box instances and measures a real proxied HTTPS request. Tests run concurrently with a limit of four workers, update each server progressively and do not transfer large amounts of data. If V2Engine is connected, it first stops that session so every server is measured directly rather than through the active proxy.
 
 ## Security and recovery
 
@@ -89,7 +92,8 @@ Domains listed under **Direct Sites** bypass the proxy and use the normal connec
 - Runtime paths, ownership and permissions are validated before sing-box starts.
 - No user input is passed through `sh -c` or unsafe shell construction.
 - Repeated connections safely replace the owned process without signaling unrelated processes.
-- sing-box cleans up TUN routes, nftables rules and DNS interception on disconnect.
+- A connection is shown as successful only after the TUN interface is ready and a public-IP request succeeds through it.
+- Disconnect and tray Stop terminate the owned process, remove the TUN interface and flush V2Engine's dedicated routing table/rules.
 
 Closing the window keeps the lightweight status notifier available. Selecting **Quit** stops an active connection before terminating V2Engine.
 
@@ -113,4 +117,4 @@ The finished package is written to `dist/V2Engine_1.0.0_amd64.deb`. The bundled 
 
 V2Engine is licensed under [GPL-3.0-or-later](LICENSE). The bundled sing-box binary is distributed under its upstream GPL-3.0-or-later license.
 
-Created by [Ali Ranjbar Jelodar](https://github.com/RanjbarAli).
+Creator: Ali Ranjbar Jelodar · [V2Engine repository](https://github.com/RanjbarAli/V2Engine-linux)
