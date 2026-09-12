@@ -92,7 +92,7 @@ Domains listed under **Direct Sites** bypass the proxy and use the normal connec
 - Runtime paths, ownership and permissions are validated before sing-box starts.
 - No user input is passed through `sh -c` or unsafe shell construction.
 - Repeated connections safely replace the owned process without signaling unrelated processes.
-- A connection is shown as successful only after the TUN interface is ready and a public-IP request succeeds through it.
+- A connection is shown as successful only after the TUN interface is ready and one of several lightweight connectivity checks succeeds through it. Public-IP lookup is independent, so a blocked IP service cannot incorrectly fail an otherwise healthy connection.
 - Disconnect and tray Stop terminate the owned process, remove the TUN interface and flush V2Engine's dedicated routing table/rules.
 
 Closing the window keeps the lightweight status notifier available. Selecting **Quit** stops an active connection before terminating V2Engine.

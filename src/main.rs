@@ -73,7 +73,7 @@ fn tray_toggle_connection() {
     if let Some(path) = transient {
         let _ = fs::remove_file(path);
     }
-    if starting && result && public_ip().is_err() {
+    if starting && result && verify_proxy_connectivity().is_err() {
         let _ = Command::new("pkexec")
             .args(["/usr/lib/v2engine/v2engine-helper", "stop"])
             .stdin(Stdio::null())
@@ -312,6 +312,9 @@ fn build(app: &gtk::Application) {
     header.add_css_class("app-header");
     header.set_show_title_buttons(false);
     header.set_title_widget(Some(&gtk::Label::new(None)));
+    let title = styled_label("V2Engine", "top-title", 0.0);
+    title.set_valign(gtk::Align::Center);
+    header.pack_start(&title);
     let window_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     window_controls.add_css_class("window-controls");
     window_controls.set_valign(gtk::Align::Center);
@@ -746,16 +749,21 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 fn public_ip() -> anyhow::Result<String> {
-    for url in ["https://api.ipify.org", "https://ifconfig.me/ip"] {
+    for url in [
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+    ] {
         let output = Command::new("curl")
             .args([
+                "--ipv4",
                 "--fail",
                 "--silent",
                 "--show-error",
                 "--noproxy",
                 "*",
                 "--max-time",
-                "12",
+                "8",
                 url,
             ])
             .env_remove("HTTP_PROXY")
@@ -770,6 +778,42 @@ fn public_ip() -> anyhow::Result<String> {
             if output.status.success() && value.parse::<std::net::IpAddr>().is_ok() {
                 return Ok(value);
             }
+        }
+    }
+    anyhow::bail!("public IP service unavailable")
+}
+
+fn verify_proxy_connectivity() -> anyhow::Result<()> {
+    for url in [
+        "https://1.1.1.1/cdn-cgi/trace",
+        "https://www.gstatic.com/generate_204",
+        "http://connectivitycheck.gstatic.com/generate_204",
+    ] {
+        let status = Command::new("curl")
+            .args([
+                "--ipv4",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--noproxy",
+                "*",
+                "--connect-timeout",
+                "4",
+                "--max-time",
+                "10",
+                "--output",
+                "/dev/null",
+                url,
+            ])
+            .env_remove("HTTP_PROXY")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("ALL_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .status();
+        if status.is_ok_and(|status| status.success()) {
+            return Ok(());
         }
     }
     anyhow::bail!("proxy connectivity check failed")
@@ -1536,8 +1580,8 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
             })
             .unwrap_or_else(|e| Err(e.to_string()));
         let result = match helper {
-            Ok(()) if on => match public_ip() {
-                Ok(ip) => Ok(Some(ip)),
+            Ok(()) if on => match verify_proxy_connectivity() {
+                Ok(()) => Ok(()),
                 Err(error) => {
                     let _ = Command::new("pkexec")
                         .args(["/usr/lib/v2engine/v2engine-helper", "stop"])
@@ -1548,7 +1592,7 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                     Err(error.to_string())
                 }
             },
-            Ok(()) => Ok(None),
+            Ok(()) => Ok(()),
             Err(error) => Err(error),
         };
         if let Some(path) = transient {
@@ -1565,7 +1609,7 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                 u.toggle.set_sensitive(true);
                 let mut timer = None;
                 match result {
-                    Ok(ip) => {
+                    Ok(()) => {
                         if on {
                             u.status.set_text("Connected");
                             u.status_dot.add_css_class("connected");
@@ -1581,8 +1625,7 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                                     protocol_label(server)
                                 ));
                             }
-                            u.current_ip
-                                .set_text(ip.as_deref().unwrap_or("Unavailable"));
+                            u.current_ip.set_text("Checking…");
                             let started = Instant::now();
                             u.connected_since = Some(started);
                             u.duration.set_text("00:00:00");
@@ -1641,6 +1684,7 @@ fn connect_toggle(s: &Rc<RefCell<Ui>>, _w: &gtk::ApplicationWindow, on: bool) {
                 drop(u);
                 if let Some(started) = timer {
                     start_duration_timer(&s, started);
+                    load_public_ip(&s);
                 }
                 glib::ControlFlow::Break
             }
@@ -1871,35 +1915,47 @@ fn test_one(server: &Server) -> String {
     };
     thread::sleep(Duration::from_millis(350));
     let proxy = format!("socks5h://127.0.0.1:{port}");
-    let result = Command::new("curl")
-        .args([
-            "--proxy",
-            &proxy,
-            "--noproxy",
-            "",
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--max-time",
-            "10",
-            "--output",
-            "/dev/null",
-            "--write-out",
-            "%{time_total}",
-            "https://www.gstatic.com/generate_204",
-        ])
-        .env_remove("HTTP_PROXY")
-        .env_remove("HTTPS_PROXY")
-        .env_remove("ALL_PROXY")
-        .env_remove("http_proxy")
-        .env_remove("https_proxy")
-        .env_remove("all_proxy")
-        .output();
+    let mut result = None;
+    for endpoint in [
+        "https://1.1.1.1/cdn-cgi/trace",
+        "https://www.gstatic.com/generate_204",
+    ] {
+        let attempt = Command::new("curl")
+            .args([
+                "--ipv4",
+                "--proxy",
+                &proxy,
+                "--noproxy",
+                "",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "10",
+                "--output",
+                "/dev/null",
+                "--write-out",
+                "%{time_total}",
+                endpoint,
+            ])
+            .env_remove("HTTP_PROXY")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("ALL_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .output();
+        if attempt.as_ref().is_ok_and(|output| output.status.success()) {
+            result = Some(attempt);
+            break;
+        }
+        result = Some(attempt);
+    }
     let _ = child.kill();
     let _ = child.wait();
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir(dir);
-    match result {
+    match result.expect("connectivity endpoints are not empty") {
         Ok(output) if output.status.success() => String::from_utf8(output.stdout)
             .ok()
             .and_then(|seconds| seconds.trim().parse::<f64>().ok())

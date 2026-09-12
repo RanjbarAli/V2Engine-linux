@@ -25,6 +25,13 @@ headerbar.app-header {
   box-shadow: none;
 }
 
+.top-title {
+  margin-left: 14px;
+  color: @text;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .brand-mark {
   min-width: 29px;
   min-height: 29px;
