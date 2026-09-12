@@ -1,0 +1,8 @@
+/target/
+/dist/
+/vendor/sing-box
+*.deb
+*.log
+.idea/
+.vscode/
+runtime/

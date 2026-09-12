@@ -1,0 +1,10 @@
+Package: v2engine
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: libc6 (>= 2.35), libglib2.0-0 (>= 2.72), libgtk-4-1 (>= 4.6), pkexec, polkitd, iproute2, nftables, curl
+Maintainer: Ali Ranjbar <info@aliranjbar.me>
+Description: Lightweight native system proxy client
+ V2Engine provides a GTK4 interface for VLESS, VMess, Trojan,
+ Shadowsocks, and SSH connections using a bundled sing-box core.

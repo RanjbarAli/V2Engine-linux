@@ -1,0 +1,315 @@
+@define-color background #111513;
+@define-color surface #181d1a;
+@define-color surface_hover #202622;
+@define-color selected #143027;
+@define-color primary #10b981;
+@define-color primary_hover #34d399;
+@define-color text #f2f5f3;
+@define-color secondary #939d98;
+@define-color muted #68716d;
+@define-color warning #f5b942;
+@define-color error #f05260;
+
+window,
+.app-shell {
+  color: @text;
+  background: @background;
+  font-family: "Ubuntu", "Cantarell", sans-serif;
+}
+
+headerbar.app-header {
+  min-height: 56px;
+  padding: 0 18px;
+  background: @background;
+  border: none;
+  box-shadow: none;
+}
+
+.brand-mark {
+  min-width: 29px;
+  min-height: 29px;
+  color: #06281d;
+  background: @primary;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 800;
+}
+.wordmark {
+  color: @text;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+
+button {
+  min-height: 38px;
+  padding: 0 14px;
+  color: @text;
+  background: @surface_hover;
+  border: none;
+  border-radius: 10px;
+  box-shadow: none;
+  font-weight: 600;
+}
+button:hover { background: #272e29; }
+button:active { background: #151a17; }
+button:focus {
+  outline: 2px solid alpha(@primary, 0.72);
+  outline-offset: 2px;
+}
+.window-controls { margin-left: 8px; }
+button.window-control {
+  min-width: 13px;
+  min-height: 13px;
+  padding: 0;
+  border-radius: 999px;
+}
+button.window-control:focus { outline-width: 1px; outline-offset: 2px; }
+button.close-control { background: #ed6a5f; }
+button.minimize-control { background: #f2bd4e; }
+button.maximize-control { background: #55c96f; }
+button.window-control:hover { opacity: 0.82; }
+
+.panel {
+  padding: 20px;
+  background: @surface;
+  border: none;
+  border-radius: 18px;
+  box-shadow: none;
+}
+.connection-panel { min-height: 248px; }
+.servers-panel.needs-attention {
+  box-shadow: inset 0 0 0 1px alpha(@error, 0.58);
+}
+
+.state-dot {
+  min-width: 8px;
+  min-height: 8px;
+  background: @muted;
+  border-radius: 999px;
+}
+.state-dot.connected { background: @primary; }
+.status {
+  color: @secondary;
+  font-size: 12px;
+  font-weight: 650;
+}
+.connection-detail {
+  color: @text;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+button.power-button {
+  min-width: 68px;
+  min-height: 68px;
+  padding: 0;
+  color: @text;
+  background: #282e2a;
+  border-radius: 18px;
+}
+button.power-button:hover { background: #303732; }
+button.power-button:checked {
+  color: white;
+  background: @primary;
+}
+button.power-button:checked:hover { background: @primary_hover; }
+
+.metrics-grid { margin-top: 3px; }
+.metric-item {
+  min-height: 44px;
+  padding: 7px 9px;
+  background: transparent;
+}
+.metric-caption {
+  color: @muted;
+  font-size: 10px;
+  font-weight: 600;
+}
+.metric-value {
+  color: @text;
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.panel-title {
+  color: @text;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+.panel-description,
+.dialog-description {
+  color: @secondary;
+  font-size: 11px;
+}
+button.compact-action {
+  min-height: 32px;
+  padding: 0 11px;
+  color: @primary_hover;
+  background: @selected;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.flat-scroll,
+.flat-scroll viewport,
+.server-list,
+.direct-list { background: transparent; border: none; }
+
+.server-list row {
+  margin-bottom: 7px;
+  color: @text;
+  background: #141916;
+  border: none;
+  border-radius: 12px;
+}
+.server-list row:hover { background: @surface_hover; }
+.server-list row:selected { color: @text; background: @selected; }
+.server-flag {
+  min-width: 30px;
+  min-height: 30px;
+  color: @secondary;
+  background: @surface_hover;
+  border-radius: 9px;
+  font-size: 16px;
+}
+.server-name {
+  color: @text;
+  font-size: 13px;
+  font-weight: 650;
+}
+.protocol {
+  color: @secondary;
+  font-size: 10px;
+  font-weight: 500;
+}
+.latency {
+  color: @muted;
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 650;
+}
+.latency-good { color: @primary_hover; }
+.latency-medium { color: @warning; }
+.latency-poor { color: @error; }
+.ping-dot {
+  min-width: 7px;
+  min-height: 7px;
+  background: @muted;
+  border-radius: 999px;
+}
+.ping-good { background: @primary_hover; }
+.ping-medium { background: @warning; }
+.ping-poor { background: @error; }
+.server-chevron { color: @muted; }
+spinner { color: @primary; }
+
+.empty-state { padding: 28px 24px; }
+.empty-icon { margin-bottom: 3px; color: @primary; }
+.empty-title {
+  color: @text;
+  font-size: 15px;
+  font-weight: 700;
+}
+.empty-subtitle {
+  color: @secondary;
+  font-size: 11px;
+}
+button.primary-action,
+button.suggested-action {
+  color: #06281d;
+  background: @primary;
+}
+button.primary-action:hover,
+button.suggested-action:hover { background: @primary_hover; }
+
+.direct-panel { min-height: 140px; }
+.direct-list row {
+  margin-bottom: 4px;
+  color: @text;
+  background: #141916;
+  border: none;
+  border-radius: 9px;
+}
+.direct-list row:hover { background: @surface_hover; }
+.domain-name { color: @text; font-size: 12px; }
+.direct-empty {
+  padding: 9px;
+  color: @muted;
+  font-size: 11px;
+}
+button.domain-remove {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: @secondary;
+  background: transparent;
+  border-radius: 7px;
+  font-size: 17px;
+}
+button.domain-remove:hover { color: @error; background: alpha(@error, 0.10); }
+button.text-action {
+  min-height: 30px;
+  padding: 0 4px;
+  color: @primary_hover;
+  background: transparent;
+  font-size: 11px;
+}
+
+.bottom-nav {
+  padding: 5px;
+  background: @surface;
+  border-radius: 13px;
+}
+button.nav-item {
+  min-height: 34px;
+  padding: 0 14px;
+  color: @secondary;
+  background: transparent;
+  border-radius: 9px;
+  font-size: 11px;
+}
+button.nav-item:hover { color: @text; background: @surface_hover; }
+button.nav-item.nav-active { color: @primary_hover; background: @selected; }
+
+dialog,
+messagedialog { background: @background; }
+.dialog-content { padding: 12px 18px 8px; }
+.dialog-title {
+  color: @text;
+  font-size: 18px;
+  font-weight: 700;
+}
+entry,
+textview.config-input,
+textview.config-input text {
+  color: @text;
+  caret-color: @primary;
+  background: @surface_hover;
+  border: none;
+  border-radius: 10px;
+}
+entry { min-height: 40px; padding: 0 11px; }
+textview.config-input { padding: 10px; }
+entry:focus,
+textview.config-input:focus {
+  box-shadow: inset 0 0 0 1px @primary;
+}
+.form-hint { color: @muted; font-size: 10px; }
+.form-error { color: @error; }
+
+.settings-content { min-width: 380px; }
+.about-section {
+  margin-top: 3px;
+  padding-top: 14px;
+}
+.update-status { color: @secondary; font-size: 11px; }
+button.author-link {
+  min-height: 24px;
+  padding: 0;
+  color: @primary_hover;
+  background: transparent;
+}

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=V2Engine
+Comment=Lightweight system proxy client
+Exec=v2engine
+Icon=io.github.ranjbarali.V2Engine
+Terminal=false
+Categories=Network;
+Keywords=Proxy;VPN;VLESS;VMess;Trojan;Shadowsocks;SSH;
+StartupNotify=true

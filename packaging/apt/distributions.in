@@ -1,0 +1,8 @@
+Origin: V2Engine
+Label: V2Engine
+Codename: stable
+Suite: stable
+Architectures: amd64
+Components: main
+Description: Signed V2Engine packages for Ubuntu and Debian
+SignWith: @SIGNING_KEY@

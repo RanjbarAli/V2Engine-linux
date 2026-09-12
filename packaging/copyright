@@ -1,0 +1,22 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: V2Engine
+Source: https://github.com/RanjbarAli/V2Engine-linux
+
+Files: *
+Copyright: 2026 Ali Ranjbar
+License: GPL-3+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 is available in /usr/share/common-licenses/GPL-3.
+Files: usr/lib/v2engine/sing-box
+Copyright: 2022-2026 nekohasekai and sing-box contributors
+License: GPL-3+
+ The bundled sing-box binary is distributed under GPL-3.0-or-later.
+ Its corresponding source is available at https://github.com/SagerNet/sing-box/tree/v1.14.0.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 is available in /usr/share/common-licenses/GPL-3.

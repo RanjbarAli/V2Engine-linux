@@ -1,0 +1,26 @@
+.TH V2ENGINE 1 "September 2026" "V2Engine 1.0.0" "User Commands"
+.SH NAME
+v2engine \- lightweight GTK4 system proxy client
+.SH SYNOPSIS
+.B v2engine
+.SH DESCRIPTION
+V2Engine imports supported proxy links from the clipboard and routes system
+traffic through a selected server using a sing-box TUN interface.
+The graphical application runs without root privileges. Polkit requests
+authorization only when system networking is started or stopped.
+.SH SHORTCUTS
+.TP
+.B Ctrl+V
+Import one or more newline-separated server configs from the clipboard.
+.TP
+.B Ctrl+C
+Copy the selected server config.
+.TP
+.B Delete
+Delete the selected server.
+.SH FILES
+.TP
+.I ~/.config/v2engine/servers.json
+User server and bypass-domain configuration, stored with mode 0600.
+.SH SEE ALSO
+.BR pkexec (1)

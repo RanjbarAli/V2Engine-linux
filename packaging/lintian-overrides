@@ -1,0 +1,4 @@
+# The bundled upstream sing-box core is a statically linked Go binary. ELF PIE
+# and RELRO checks are not applicable to Go's internal linker output.
+v2engine: hardening-no-pie [usr/lib/v2engine/sing-box]
+v2engine: hardening-no-relro [usr/lib/v2engine/sing-box]

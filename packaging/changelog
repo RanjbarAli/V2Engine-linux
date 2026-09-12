@@ -1,0 +1,10 @@
+v2engine (1.0.0) stable; urgency=medium
+
+  * Initial production release.
+  * Add VLESS, Reality, VMess, Trojan, Shadowsocks, and SSH support.
+  * Add system TUN mode, direct-domain routing, and proxy latency tests.
+  * Add the compact charcoal and emerald GTK interface.
+  * Add a native Linux status notifier menu and custom window controls.
+  * Add GitHub Release update checks and verified in-app package installation.
+
+ -- Ali Ranjbar <info@aliranjbar.me>  Sat, 12 Sep 2026 12:00:00 +0400
