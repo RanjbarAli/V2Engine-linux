@@ -17,11 +17,24 @@ window,
   font-family: "Ubuntu", "Cantarell", sans-serif;
 }
 
+window.background.csd,
+dialog.background.csd,
+messagedialog.background.csd {
+  border-radius: 16px;
+}
+
+.app-shell {
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
+}
+
 headerbar.app-header {
   min-height: 38px;
   padding: 0;
   background: @background;
   border: none;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
   box-shadow: none;
 }
 
@@ -299,7 +312,14 @@ button.nav-item:hover { color: @text; background: @surface_hover; }
 button.nav-item.nav-active { color: @primary_hover; background: @selected; }
 
 dialog,
-messagedialog { background: @background; }
+messagedialog {
+  background: @background;
+  border-radius: 16px;
+}
+dialog > box,
+messagedialog > box {
+  border-radius: 16px;
+}
 .dialog-content { padding: 12px 18px 8px; }
 .dialog-action-area {
   margin: 4px 18px 16px;
