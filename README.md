@@ -12,8 +12,9 @@ V2Engine is a lightweight native Linux proxy client built with Rust and GTK4. It
 - Three in-window pages for Servers, Direct Sites and Settings
 - System-wide TUN routing powered by sing-box
 - VLESS, VLESS Reality, VMess, Trojan, Shadowsocks and SSH support
+- Compatibility for legacy VLESS/VMess TCP HTTP-header camouflage links
 - SSH password and private-key authentication
-- Multiple newline-separated configuration imports
+- Multi-server clipboard import from newline-, whitespace- or text-separated links
 - Real proxied connectivity and latency tests with limited concurrency
 - Direct Sites routing for domains and all their subdomains
 - Native Linux status notifier with server selection and connection controls
@@ -46,7 +47,7 @@ The GTK application always runs as the current user. A system authentication pro
 
 | Protocol | Import format | Notes |
 | --- | --- | --- |
-| VLESS | `vless://` | TLS, Reality, WebSocket, gRPC, HTTP and HTTP Upgrade |
+| VLESS | `vless://` | TLS, Reality, TCP HTTP-header camouflage, WebSocket, gRPC, HTTP and HTTP Upgrade |
 | VMess | `vmess://` | Base64 JSON links |
 | Trojan | `trojan://` | TLS and supported transports |
 | Shadowsocks | `ss://` | SIP002 and legacy Base64 links |
@@ -80,7 +81,7 @@ Domains listed under **Direct Sites** bypass the proxy and use the normal connec
 
 ## Server testing
 
-**Test All** starts temporary unprivileged sing-box instances and measures a real proxied HTTPS request. Tests run concurrently with a limit of four workers, update each server progressively and do not transfer large amounts of data. If V2Engine is connected, it first stops that session so every server is measured directly rather than through the active proxy.
+**Test All** waits for each temporary unprivileged sing-box instance to become ready, then measures real proxied HTTP/HTTPS requests against several small connectivity endpoints with retry fallback. Tests run concurrently with a limit of four workers, update each server progressively and do not transfer large amounts of data. If V2Engine is connected, it first stops that session so every server is measured directly rather than through the active proxy. Successful sub-millisecond measurements are displayed as at least `1 ms`, never `0 ms`.
 
 ## Security and recovery
 
@@ -88,7 +89,7 @@ Domains listed under **Direct Sites** bypass the proxy and use the normal connec
 - Configuration and runtime directories use mode `0700`.
 - Passwords and private keys are never written to application logs.
 - Runtime configurations use mode `0600` and are removed after handoff.
-- The root helper accepts only `start`, `stop` and `status` operations.
+- The root helper exposes only validated networking operations; the TCP HTTP-header compatibility bridge uses a fixed routing mark solely to keep its upstream socket outside the TUN loop.
 - Runtime paths, ownership and permissions are validated before sing-box starts.
 - No user input is passed through `sh -c` or unsafe shell construction.
 - Repeated connections safely replace the owned process without signaling unrelated processes.
@@ -103,15 +104,15 @@ The Settings screen checks the latest stable release from this repository. An up
 
 ## Building from source
 
-Ubuntu/Debian build dependencies include Rust, Cargo, `libgtk-4-dev`, `pkg-config`, `curl` and standard Debian packaging tools.
+Ubuntu/Debian build dependencies include Rust, Cargo, Go 1.25.5, `libgtk-4-dev`, `pkg-config`, `curl` and standard Debian packaging tools.
 
 ```bash
-./packaging/fetch-sing-box.sh
+./packaging/build-sing-box.sh
 cargo build --release --locked
 ./packaging/build-deb.sh
 ```
 
-The finished package is written to `dist/V2Engine_1.0.0_amd64.deb`. The bundled sing-box version is pinned and checksum-verified by the fetch script.
+The finished package is written to `dist/V2Engine_1.0.0_amd64.deb`. The build script verifies the pinned sing-box source archive, enables only the uTLS feature needed by V2Engine's supported protocols, and produces a smaller stripped core.
 
 ## License
 

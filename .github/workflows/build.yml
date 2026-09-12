@@ -19,10 +19,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.5'
+          cache: false
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev pkg-config lintian
-      - name: Download verified sing-box core
-        run: ./packaging/fetch-sing-box.sh
+      - name: Build minimal verified sing-box core
+        run: ./packaging/build-sing-box.sh
       - name: Check formatting and lint
         run: cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
       - name: Test

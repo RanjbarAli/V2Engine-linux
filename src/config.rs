@@ -25,6 +25,14 @@ pub struct Store {
     pub bypass: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TcpHttpBridge {
+    pub server: String,
+    pub server_port: u16,
+    pub host: String,
+    pub path: String,
+}
+
 pub fn config_dir() -> Result<PathBuf> {
     Ok(dirs::config_dir()
         .ok_or_else(|| anyhow!("No configuration directory"))?
@@ -77,19 +85,40 @@ fn id_for(s: &str) -> String {
 pub fn parse_many(text: &str) -> (Vec<Server>, Vec<String>) {
     let mut ok = vec![];
     let mut bad = vec![];
-    for line in text
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.starts_with('#'))
-    {
-        match parse(line) {
+    let lower = text.to_ascii_lowercase();
+    let mut starts = Vec::new();
+    for scheme in ["vless://", "vmess://", "trojan://", "ss://", "ssh://"] {
+        starts.extend(lower.match_indices(scheme).filter_map(|(index, _)| {
+            let boundary = index == 0 || !lower.as_bytes()[index - 1].is_ascii_alphanumeric();
+            boundary.then_some(index)
+        }));
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    for (position, start) in starts.iter().copied().enumerate() {
+        let end = starts.get(position + 1).copied().unwrap_or(text.len());
+        let candidate = text[start..end]
+            .trim_matches(|character: char| {
+                character.is_whitespace() || matches!(character, ',' | ';' | '"' | '\'' | '[' | ']')
+            })
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches([',', ';']);
+        if candidate.is_empty() {
+            continue;
+        }
+        match parse(candidate) {
             Ok(s) => ok.push(s),
             Err(e) => bad.push(format!(
                 "{}: {}",
-                line.split(':').next().unwrap_or("config"),
+                candidate.split(':').next().unwrap_or("config"),
                 e
             )),
         }
+    }
+    if starts.is_empty() && !text.trim().is_empty() {
+        bad.push("config: no supported URI found".into());
     }
     (ok, bad)
 }
@@ -142,6 +171,18 @@ fn qp(u: &Url, key: &str) -> Option<String> {
         .map(|(_, v)| v.into_owned())
         .filter(|s| !s.is_empty())
 }
+
+fn enabled(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+fn alpn(value: &str) -> Vec<&str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
 fn host_port(u: &Url, default: u16) -> Result<(String, u16)> {
     Ok((
         u.host_str()
@@ -185,16 +226,32 @@ fn vmess(raw: &str) -> Result<Value> {
     if !valid_uuid(uuid) {
         bail!("invalid UUID")
     }
-    let mut o = json!({"type":"vmess","tag":"proxy","server":server,"server_port":port,"uuid":uuid,"security":v["scy"].as_str().unwrap_or("auto")});
+    let alter_id = v["aid"]
+        .as_u64()
+        .or_else(|| v["aid"].as_str().and_then(|value| value.parse().ok()))
+        .unwrap_or(0);
+    let mut o = json!({"type":"vmess","tag":"proxy","server":server,"server_port":port,"uuid":uuid,"security":v["scy"].as_str().unwrap_or("auto"),"alter_id":alter_id});
     if v["tls"].as_str().unwrap_or("") == "tls" {
-        o["tls"] = json!({"enabled":true,"server_name":v["sni"].as_str().unwrap_or(server),"insecure":v["allowInsecure"].as_bool().unwrap_or(false)});
+        let insecure = v["allowInsecure"]
+            .as_bool()
+            .unwrap_or_else(|| enabled(v["allowInsecure"].as_str()));
+        let mut tls = json!({"enabled":true,"server_name":v["sni"].as_str().filter(|value| !value.is_empty()).unwrap_or(server),"insecure":insecure});
+        if let Some(value) = v["alpn"].as_str().filter(|value| !value.is_empty()) {
+            tls["alpn"] = json!(alpn(value));
+        }
+        if let Some(value) = v["fp"].as_str().filter(|value| !value.is_empty()) {
+            tls["utls"] = json!({"enabled":true,"fingerprint":value});
+        }
+        o["tls"] = tls;
+    }
+    if let Some(value) = v["packetEncoding"]
+        .as_str()
+        .filter(|value| matches!(*value, "packetaddr" | "xudp"))
+    {
+        o["packet_encoding"] = json!(value);
     }
     let network = v["net"].as_str().unwrap_or("tcp");
-    let transport_kind = if network == "tcp" && v["type"].as_str() == Some("http") {
-        "http"
-    } else {
-        network
-    };
+    let transport_kind = network;
     transport(
         &mut o,
         transport_kind,
@@ -226,9 +283,9 @@ fn url_outbound(raw: &str) -> Result<Value> {
     if let Some(flow) = qp(&u, "flow") {
         o["flow"] = json!(flow)
     }
-    let security = qp(&u, "security").unwrap_or_default();
+    let security = qp(&u, "security").unwrap_or_default().to_ascii_lowercase();
     if security == "tls" || security == "reality" {
-        let mut tls = json!({"enabled":true,"server_name":qp(&u,"sni").unwrap_or(host.clone()),"insecure":qp(&u,"allowInsecure").as_deref()==Some("1")});
+        let mut tls = json!({"enabled":true,"server_name":qp(&u,"sni").unwrap_or(host.clone()),"insecure":enabled(qp(&u,"allowInsecure").as_deref())});
         if security == "reality" {
             let pk = qp(&u, "pbk").ok_or_else(|| anyhow!("Reality public key missing"))?;
             tls["reality"] =
@@ -237,14 +294,18 @@ fn url_outbound(raw: &str) -> Result<Value> {
         if let Some(fp) = qp(&u, "fp") {
             tls["utls"] = json!({"enabled":true,"fingerprint":fp});
         }
+        if let Some(value) = qp(&u, "alpn") {
+            tls["alpn"] = json!(alpn(&value));
+        }
         o["tls"] = tls;
     }
+    if let Some(value) =
+        qp(&u, "packetEncoding").filter(|value| matches!(value.as_str(), "packetaddr" | "xudp"))
+    {
+        o["packet_encoding"] = json!(value);
+    }
     let network = qp(&u, "type").unwrap_or_else(|| "tcp".into());
-    let transport_kind = if network == "tcp" && qp(&u, "headerType").as_deref() == Some("http") {
-        "http"
-    } else {
-        &network
-    };
+    let transport_kind = &network;
     transport(
         &mut o,
         transport_kind,
@@ -252,7 +313,83 @@ fn url_outbound(raw: &str) -> Result<Value> {
         qp(&u, "path").as_deref(),
         qp(&u, "serviceName").as_deref(),
     );
+    if transport_kind == "ws" {
+        if let Some(early_data) = qp(&u, "ed").and_then(|value| value.parse::<u32>().ok()) {
+            if early_data > 0 {
+                o["transport"]["max_early_data"] = json!(early_data);
+                o["transport"]["early_data_header_name"] =
+                    json!(qp(&u, "eh").unwrap_or_else(|| "Sec-WebSocket-Protocol".into()));
+            }
+        }
+    }
     Ok(o)
+}
+
+pub fn tcp_http_bridge(server: &Server) -> Result<Option<TcpHttpBridge>> {
+    if server.protocol.eq_ignore_ascii_case("vmess") {
+        let encoded = server.uri.trim_start_matches("vmess://");
+        let value: Value = serde_json::from_slice(&decode_b64(encoded)?)?;
+        let network = value["net"].as_str().unwrap_or("tcp");
+        let header = value["type"].as_str().unwrap_or("none");
+        if !(network.eq_ignore_ascii_case("tcp") || network.eq_ignore_ascii_case("raw"))
+            || !header.eq_ignore_ascii_case("http")
+        {
+            return Ok(None);
+        }
+        let server = value["add"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("missing server"))?;
+        let server_port = value["port"]
+            .as_str()
+            .and_then(|port| port.parse().ok())
+            .or_else(|| {
+                value["port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
+            })
+            .ok_or_else(|| anyhow!("missing port"))?;
+        return Ok(Some(TcpHttpBridge {
+            server: server.to_owned(),
+            server_port,
+            host: value["host"].as_str().unwrap_or("").to_owned(),
+            path: value["path"].as_str().unwrap_or("/").to_owned(),
+        }));
+    }
+    if !server.protocol.eq_ignore_ascii_case("vless")
+        && !server.protocol.eq_ignore_ascii_case("trojan")
+    {
+        return Ok(None);
+    }
+    let url = Url::parse(&server.uri)?;
+    let network = qp(&url, "type").unwrap_or_else(|| "tcp".into());
+    let header = qp(&url, "headerType").unwrap_or_else(|| "none".into());
+    if !(network.eq_ignore_ascii_case("tcp") || network.eq_ignore_ascii_case("raw"))
+        || !header.eq_ignore_ascii_case("http")
+    {
+        return Ok(None);
+    }
+    let (server_host, server_port) = host_port(&url, 443)?;
+    Ok(Some(TcpHttpBridge {
+        server: server_host,
+        server_port,
+        host: qp(&url, "host").unwrap_or_default(),
+        path: qp(&url, "path").unwrap_or_else(|| "/".into()),
+    }))
+}
+
+pub fn route_via_tcp_http_bridge(config: &mut Value, listen_port: u16) -> Result<()> {
+    let proxy = config
+        .get_mut("outbounds")
+        .and_then(Value::as_array_mut)
+        .and_then(|outbounds| outbounds.first_mut())
+        .ok_or_else(|| anyhow!("missing proxy outbound"))?;
+    proxy["server"] = json!("127.0.0.1");
+    proxy["server_port"] = json!(listen_port);
+    if let Some(object) = proxy.as_object_mut() {
+        object.remove("transport");
+    }
+    Ok(())
 }
 
 fn transport(
@@ -347,7 +484,7 @@ pub fn singbox_config(
     let mut proxy = outbound(server)?;
     proxy["tag"] = json!("proxy");
     let inbound = if tun {
-        json!({"type":"tun","tag":"tun-in","interface_name":"v2engine0","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"mtu":1500,"auto_route":true,"auto_redirect":true,"strict_route":true,"iproute2_table_index":20228,"iproute2_rule_index":9028,"dns_mode":"hijack"})
+        json!({"type":"tun","tag":"tun-in","interface_name":"v2engine0","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"mtu":1500,"auto_route":true,"auto_redirect":true,"auto_redirect_output_mark":8228,"strict_route":true,"iproute2_table_index":20228,"iproute2_rule_index":9028,"dns_mode":"hijack"})
     } else {
         json!({"type":"mixed","tag":"test-in","listen":"127.0.0.1","listen_port":socks_port.unwrap_or(19090)})
     };
@@ -365,9 +502,17 @@ pub fn singbox_config(
     if !domains.is_empty() {
         rules.push(json!({"domain_suffix":domains,"action":"route","outbound":"direct"}));
     }
-    Ok(
-        json!({"log":{"level":"warn","timestamp":true},"dns":{"servers":[{"type":"https","tag":"dns-remote","server":"1.1.1.1"}]},"inbounds":[inbound],"outbounds":[proxy,{"type":"direct","tag":"direct"}],"route":{"rules":rules,"final":"proxy","auto_detect_interface":true,"default_domain_resolver":"dns-remote"}}),
-    )
+    proxy["domain_resolver"] = json!("dns-direct");
+    Ok(json!({
+        "log":{"level":"warn","timestamp":true},
+        "dns":{"servers":[
+            {"type":"local","tag":"dns-direct"},
+            {"type":"https","tag":"dns-remote","server":"1.1.1.1"}
+        ]},
+        "inbounds":[inbound],
+        "outbounds":[proxy,{"type":"direct","tag":"direct","domain_resolver":"dns-direct"}],
+        "route":{"rules":rules,"final":"proxy","auto_detect_interface":true,"default_domain_resolver":"dns-remote"}
+    }))
 }
 
 pub fn valid_domain(d: &str) -> bool {

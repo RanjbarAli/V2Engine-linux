@@ -433,9 +433,12 @@ fn build(app: &gtk::Application) {
     let server_header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let servers_title = styled_label("Servers", "panel-title", 0.0);
     servers_title.set_hexpand(true);
+    let add_server_header = gtk::Button::with_label("+  Add Server");
+    add_server_header.add_css_class("compact-action");
     let test = gtk::Button::with_label("Test All");
     test.add_css_class("compact-action");
     server_header.append(&servers_title);
+    server_header.append(&add_server_header);
     server_header.append(&test);
     server_panel.append(&server_header);
 
@@ -567,6 +570,11 @@ fn build(app: &gtk::Application) {
         let s = state.clone();
         let w = window.clone();
         add_server.connect_clicked(move |_| import_dialog(&s, &w));
+    }
+    {
+        let s = state.clone();
+        let w = window.clone();
+        add_server_header.connect_clicked(move |_| import_dialog(&s, &w));
     }
     {
         let pages = page_stack.clone();
@@ -801,6 +809,9 @@ fn verify_proxy_connectivity() -> anyhow::Result<()> {
                 "4",
                 "--max-time",
                 "10",
+                "--retry",
+                "1",
+                "--retry-all-errors",
                 "--output",
                 "/dev/null",
                 url,
@@ -1514,7 +1525,20 @@ fn runtime_config(server: &Server, bypass: &[String]) -> anyhow::Result<PathBuf>
         .write(true)
         .mode(0o600)
         .open(&path)?;
-    serde_json::to_writer_pretty(&mut f, &config::singbox_config(server, bypass, true, None)?)?;
+    let mut generated = config::singbox_config(server, bypass, true, None)?;
+    if let Some(bridge) = config::tcp_http_bridge(server)? {
+        let listen_port = free_port().ok_or_else(|| anyhow::anyhow!("No local port available"))?;
+        config::route_via_tcp_http_bridge(&mut generated, listen_port)?;
+        generated["v2engine_bridge"] = serde_json::json!({
+            "type": "tcp-http",
+            "listen_port": listen_port,
+            "server": bridge.server,
+            "server_port": bridge.server_port,
+            "host": bridge.host,
+            "path": bridge.path,
+        });
+    }
+    serde_json::to_writer_pretty(&mut f, &generated)?;
     f.sync_all()?;
     Ok(path)
 }
@@ -1853,6 +1877,16 @@ fn singbox_path() -> PathBuf {
         PathBuf::from("vendor/sing-box")
     }
 }
+fn helper_path() -> PathBuf {
+    let installed = PathBuf::from("/usr/lib/v2engine/v2engine-helper");
+    if installed.exists() {
+        installed
+    } else if cfg!(debug_assertions) {
+        PathBuf::from("target/debug/v2engine-helper")
+    } else {
+        PathBuf::from("target/release/v2engine-helper")
+    }
+}
 fn system_connected() -> bool {
     let Ok(pid) = fs::read_to_string("/run/v2engine/sing-box.pid") else {
         return false;
@@ -1875,8 +1909,35 @@ fn test_one(server: &Server) -> String {
     let Some(port) = free_port() else {
         return "Failed".into();
     };
-    let Ok(cfg) = config::singbox_config(server, &[], false, Some(port)) else {
+    let Ok(mut cfg) = config::singbox_config(server, &[], false, Some(port)) else {
         return "Failed".into();
+    };
+    let mut bridge_child = match config::tcp_http_bridge(server) {
+        Ok(Some(bridge)) => {
+            let Some(bridge_port) = free_port() else {
+                return "Failed".into();
+            };
+            if config::route_via_tcp_http_bridge(&mut cfg, bridge_port).is_err() {
+                return "Failed".into();
+            }
+            match Command::new(helper_path())
+                .arg("bridge")
+                .arg(bridge_port.to_string())
+                .arg(bridge.server)
+                .arg(bridge.server_port.to_string())
+                .arg(bridge.host)
+                .arg(bridge.path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => Some(child),
+                Err(_) => return "Failed".into(),
+            }
+        }
+        Ok(None) => None,
+        Err(_) => return "Failed".into(),
     };
     let dir = std::env::temp_dir().join(format!("v2engine-test-{}-{}", std::process::id(), port));
     if fs::DirBuilder::new()
@@ -1896,6 +1957,10 @@ fn test_one(server: &Server) -> String {
         .open(&path)
         .and_then(|mut file| file.write_all(&config_data));
     if config_file.is_err() {
+        if let Some(child) = bridge_child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         let _ = fs::remove_dir(&dir);
         return "Failed".into();
     }
@@ -1908,17 +1973,43 @@ fn test_one(server: &Server) -> String {
     {
         Ok(c) => c,
         Err(_) => {
+            if let Some(child) = bridge_child.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
             let _ = fs::remove_file(&path);
             let _ = fs::remove_dir(&dir);
             return "Failed".into();
         }
     };
-    thread::sleep(Duration::from_millis(350));
+    let mut ready = false;
+    for _ in 0..40 {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    if !ready {
+        let _ = child.kill();
+        let _ = child.wait();
+        if let Some(child) = bridge_child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_dir(dir);
+        return "Failed".into();
+    }
     let proxy = format!("socks5h://127.0.0.1:{port}");
     let mut result = None;
     for endpoint in [
         "https://1.1.1.1/cdn-cgi/trace",
         "https://www.gstatic.com/generate_204",
+        "http://connectivitycheck.gstatic.com/generate_204",
     ] {
         let attempt = Command::new("curl")
             .args([
@@ -1930,8 +2021,13 @@ fn test_one(server: &Server) -> String {
                 "--fail",
                 "--silent",
                 "--show-error",
+                "--connect-timeout",
+                "5",
                 "--max-time",
                 "10",
+                "--retry",
+                "1",
+                "--retry-all-errors",
                 "--output",
                 "/dev/null",
                 "--write-out",
@@ -1953,13 +2049,17 @@ fn test_one(server: &Server) -> String {
     }
     let _ = child.kill();
     let _ = child.wait();
+    if let Some(child) = bridge_child.as_mut() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir(dir);
     match result.expect("connectivity endpoints are not empty") {
         Ok(output) if output.status.success() => String::from_utf8(output.stdout)
             .ok()
             .and_then(|seconds| seconds.trim().parse::<f64>().ok())
-            .map(|seconds| format!("{} ms", (seconds * 1000.0).round() as u64))
+            .map(|seconds| format!("{} ms", ((seconds * 1000.0).round() as u64).max(1)))
             .unwrap_or_else(|| "Failed".into()),
         Ok(output) if output.status.code() == Some(28) => "Timeout".into(),
         _ => "Failed".into(),
@@ -2080,13 +2180,25 @@ mod tests {
     }
 
     #[test]
-    fn maps_legacy_tcp_http_header_to_http_transport() {
+    fn imports_multiple_configs_from_mixed_clipboard_text() {
+        let text = "Servers: vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls#One,\nssh://user:password@example.net:22#Two";
+        let (servers, rejected) = config::parse_many(text);
+        assert_eq!(servers.len(), 2, "{rejected:?}");
+        assert!(rejected.is_empty());
+    }
+
+    #[test]
+    fn detects_legacy_tcp_http_header_bridge() {
         let server = config::parse(
             "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?encryption=none&type=tcp&headerType=http#HTTP",
         )
         .unwrap();
         let outbound = config::outbound(&server).unwrap();
-        assert_eq!(outbound["transport"]["type"], "http");
+        assert!(outbound.get("transport").is_none());
+        let bridge = config::tcp_http_bridge(&server).unwrap().unwrap();
+        assert_eq!(bridge.server, "example.com");
+        assert_eq!(bridge.server_port, 443);
+        assert_eq!(bridge.path, "/");
     }
 
     #[test]

@@ -2,3 +2,4 @@
 # and RELRO checks are not applicable to Go's internal linker output.
 v2engine: hardening-no-pie [usr/lib/v2engine/sing-box]
 v2engine: hardening-no-relro [usr/lib/v2engine/sing-box]
+v2engine: statically-linked-binary [usr/lib/v2engine/sing-box]
